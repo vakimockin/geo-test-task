@@ -1,8 +1,13 @@
 from collections.abc import Mapping, Sequence
+from contextlib import AsyncExitStack
 from dataclasses import dataclass, field
 from uuid import UUID
 
+from geotrack.app import RuntimeBuilder
+from geotrack.config import Settings
 from geotrack.db.tables import Geozone
+from geotrack.runtime import Runtime
+from geotrack.zones.service import GeozoneService
 
 
 class MemoryZones:
@@ -55,3 +60,29 @@ class RecordingBus:
         if self.broken:
             raise ConnectionError("bus is down")
         self.frames.extend(items)
+
+
+@dataclass
+class StubRuntimeParts:
+    """What a test needs to reach behind the HTTP layer."""
+
+    zones: MemoryZones
+    bus: RecordingBus
+    runtime: Runtime
+
+
+def stub_runtime(settings: Settings) -> StubRuntimeParts:
+    zones = MemoryZones()
+    bus = RecordingBus()
+    runtime = Runtime(
+        settings=settings,
+        zones=GeozoneService(zones, bus, per_user_limit=settings.max_geozones_per_user),
+    )
+    return StubRuntimeParts(zones, bus, runtime)
+
+
+def builder_for(parts: StubRuntimeParts) -> RuntimeBuilder:
+    async def build(settings: Settings, stack: AsyncExitStack) -> Runtime:
+        return parts.runtime
+
+    return build
