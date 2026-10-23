@@ -1,6 +1,16 @@
 # dev-only default credentials, override them via environment or .env
 name: geotrack
 
+x-geotrack-env: &geotrack-env
+  GEOTRACK_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-geo}:${POSTGRES_PASSWORD:-geo}@db:5432/${POSTGRES_DB:-geo}
+  GEOTRACK_REDIS_URL: redis://redis:6379/0
+  GEOTRACK_LOG_LEVEL: ${GEOTRACK_LOG_LEVEL:-INFO}
+
+x-hardening: &hardening
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+
 services:
   db:
     # multi-arch build of docker-postgis (postgis/postgis is amd64 only)
@@ -25,13 +35,46 @@ services:
     image: redis:7.4-alpine
     restart: unless-stopped
     command: ["redis-server", "--save", "", "--appendonly", "no"]
-    ports:
-      - "127.0.0.1:6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 3s
       timeout: 3s
       retries: 20
+
+  migrate:
+    build: .
+    image: geotrack:local
+    command: ["alembic", "upgrade", "head"]
+    environment: *geotrack-env
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+    <<: *hardening
+
+  api:
+    build: .
+    image: geotrack:local
+    restart: unless-stopped
+    init: true
+    # tuning comes from .env when present; the URLs below always win
+    env_file:
+      - path: .env
+        required: false
+    environment: *geotrack-env
+    ports:
+      - "${API_PORT:-8000}:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    tmpfs:
+      - /tmp
+    stop_grace_period: 30s
+    <<: *hardening
 
 volumes:
   pgdata:
