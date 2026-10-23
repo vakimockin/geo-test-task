@@ -8,9 +8,11 @@ from uuid import UUID
 from geotrack.app import RuntimeBuilder
 from geotrack.config import Settings
 from geotrack.db.tables import Geozone
+from geotrack.live.cache import PositionCache
+from geotrack.live.hub import Hub
 from geotrack.runtime import Runtime
 from geotrack.telemetry.intake import Intake, TimeWindow
-from geotrack.telemetry.model import PositionReport
+from geotrack.telemetry.model import AppliedPosition, PositionReport
 from geotrack.telemetry.pipeline import PositionPipeline
 from geotrack.zones.service import GeozoneService
 
@@ -59,12 +61,18 @@ class RecordingBus:
     """Stands in for RedisBus on the publishing side."""
 
     frames: list[tuple[str, str]] = field(default_factory=list)
+    positions: list[AppliedPosition] = field(default_factory=list)
     broken: bool = False
 
     async def publish_frames(self, items: Sequence[tuple[str, str]]) -> None:
         if self.broken:
             raise ConnectionError("bus is down")
         self.frames.extend(items)
+
+    async def publish_positions(self, applied: Sequence[AppliedPosition]) -> None:
+        if self.broken:
+            raise ConnectionError("bus is down")
+        self.positions.extend(applied)
 
 
 @dataclass
@@ -122,6 +130,12 @@ def stub_runtime(settings: Settings) -> StubRuntimeParts:
         max_delay=settings.pipeline_max_delay,
         drain_timeout=settings.pipeline_drain_timeout,
     )
+    hub = Hub(
+        PositionCache(
+            cell_degrees=settings.live_grid_cell_degrees,
+            ttl=settings.live_device_ttl_seconds,
+        )
+    )
     window = TimeWindow(
         max_future=timedelta(seconds=settings.report_max_future_seconds),
         max_age=timedelta(seconds=settings.report_max_age_seconds),
@@ -131,6 +145,7 @@ def stub_runtime(settings: Settings) -> StubRuntimeParts:
         zones=GeozoneService(zones, bus, per_user_limit=settings.max_geozones_per_user),
         intake=Intake(pipeline, window),
         pipeline=pipeline,
+        hub=hub,
     )
     return StubRuntimeParts(zones, bus, flushed, runtime)
 
