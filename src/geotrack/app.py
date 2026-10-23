@@ -8,6 +8,7 @@ from geotrack.body_limit import BodyLimitMiddleware
 from geotrack.config import Settings
 from geotrack.problems import install_problem_handlers
 from geotrack.runtime import Runtime
+from geotrack.telemetry import routes as telemetry_routes
 from geotrack.wiring import build_runtime
 from geotrack.zones import routes as zone_routes
 
@@ -36,5 +37,6 @@ def create_app(
 
     api = APIRouter(prefix="/api/v1")
     api.include_router(zone_routes.router)
+    api.include_router(telemetry_routes.router)
     app.include_router(api)
     return app

@@ -5,6 +5,8 @@ from fastapi import Depends
 from starlette.requests import HTTPConnection
 
 from geotrack.config import Settings
+from geotrack.telemetry.intake import Intake
+from geotrack.telemetry.pipeline import PositionPipeline
 from geotrack.zones.service import GeozoneService
 
 
@@ -14,6 +16,8 @@ class Runtime:
 
     settings: Settings
     zones: GeozoneService
+    intake: Intake
+    pipeline: PositionPipeline
 
 
 def current_runtime(connection: HTTPConnection) -> Runtime:

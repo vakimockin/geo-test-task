@@ -1,12 +1,16 @@
 from collections.abc import Mapping, Sequence
 from contextlib import AsyncExitStack
 from dataclasses import dataclass, field
+from datetime import timedelta
 from uuid import UUID
 
 from geotrack.app import RuntimeBuilder
 from geotrack.config import Settings
 from geotrack.db.tables import Geozone
 from geotrack.runtime import Runtime
+from geotrack.telemetry.intake import Intake, TimeWindow
+from geotrack.telemetry.model import PositionReport
+from geotrack.telemetry.pipeline import PositionPipeline
 from geotrack.zones.service import GeozoneService
 
 
@@ -68,17 +72,36 @@ class StubRuntimeParts:
 
     zones: MemoryZones
     bus: RecordingBus
+    flushed: list[list[PositionReport]]
     runtime: Runtime
 
 
 def stub_runtime(settings: Settings) -> StubRuntimeParts:
     zones = MemoryZones()
     bus = RecordingBus()
+    flushed: list[list[PositionReport]] = []
+
+    async def flush(batch: list[PositionReport]) -> None:
+        flushed.append(batch)
+
+    pipeline = PositionPipeline(
+        flush,
+        capacity=settings.pipeline_capacity,
+        batch_size=settings.pipeline_batch_size,
+        max_delay=settings.pipeline_max_delay,
+        drain_timeout=settings.pipeline_drain_timeout,
+    )
+    window = TimeWindow(
+        max_future=timedelta(seconds=settings.report_max_future_seconds),
+        max_age=timedelta(seconds=settings.report_max_age_seconds),
+    )
     runtime = Runtime(
         settings=settings,
         zones=GeozoneService(zones, bus, per_user_limit=settings.max_geozones_per_user),
+        intake=Intake(pipeline, window),
+        pipeline=pipeline,
     )
-    return StubRuntimeParts(zones, bus, runtime)
+    return StubRuntimeParts(zones, bus, flushed, runtime)
 
 
 def builder_for(parts: StubRuntimeParts) -> RuntimeBuilder:

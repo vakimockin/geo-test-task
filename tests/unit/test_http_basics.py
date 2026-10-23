@@ -33,14 +33,14 @@ def test_unknown_route_and_method_use_problem_details(client: TestClient) -> Non
     missing = client.get("/nope")
     assert missing.status_code == 404
     assert missing.json()["title"] == "Not Found"
-    wrong = client.put("/api/v1/geozones")
+    wrong = client.delete("/api/v1/positions")
     assert wrong.status_code == 405
     assert wrong.headers["content-type"] == "application/problem+json"
 
 
 def test_declared_oversized_body_is_413(client: TestClient) -> None:
     response = client.post(
-        "/api/v1/geozones",
+        "/api/v1/positions",
         content=b"x" * 200_001,
         headers={"Content-Type": "application/json"},
     )
@@ -54,7 +54,7 @@ def test_streamed_oversized_body_is_413(client: TestClient) -> None:
             yield b"x" * 10_000
 
     response = client.post(
-        "/api/v1/geozones",
+        "/api/v1/positions",
         content=chunks(),
         headers={"Content-Type": "application/json"},
     )
@@ -63,4 +63,4 @@ def test_streamed_oversized_body_is_413(client: TestClient) -> None:
 
 def test_openapi_lists_the_api(client: TestClient) -> None:
     paths = client.get("/openapi.json").json()["paths"]
-    assert {"/api/v1/geozones"} <= set(paths)
+    assert {"/api/v1/geozones", "/api/v1/positions"} <= set(paths)
