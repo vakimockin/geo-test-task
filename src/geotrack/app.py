@@ -6,6 +6,7 @@ from fastapi import APIRouter, FastAPI
 from geotrack import __version__
 from geotrack.body_limit import BodyLimitMiddleware
 from geotrack.config import Settings
+from geotrack.live import routes as live_routes
 from geotrack.problems import install_problem_handlers
 from geotrack.runtime import Runtime
 from geotrack.telemetry import routes as telemetry_routes
@@ -39,4 +40,5 @@ def create_app(
     api.include_router(zone_routes.router)
     api.include_router(telemetry_routes.router)
     app.include_router(api)
+    app.include_router(live_routes.router)
     return app
