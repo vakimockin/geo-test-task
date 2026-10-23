@@ -67,6 +67,18 @@ class RecordingBus:
         self.frames.extend(items)
 
 
+@dataclass
+class FollowLog:
+    followed: list[str] = field(default_factory=list)
+    unfollowed: list[str] = field(default_factory=list)
+
+    def follow(self, user: str) -> None:
+        self.followed.append(user)
+
+    def unfollow(self, user: str) -> None:
+        self.unfollowed.append(user)
+
+
 class FakeSocket:
     """Records frames; optionally blocks every send until released."""
 
