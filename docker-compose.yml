@@ -1,0 +1,25 @@
+# dev-only default credentials, override them via environment or .env
+name: geotrack
+
+services:
+  db:
+    # multi-arch build of docker-postgis (postgis/postgis is amd64 only)
+    image: ${POSTGIS_IMAGE:-imresamu/postgis:17-3.5}
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-geo}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-geo}
+      POSTGRES_DB: ${POSTGRES_DB:-geo}
+    ports:
+      - "127.0.0.1:${POSTGRES_HOST_PORT:-54329}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    shm_size: 256mb
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  pgdata:
