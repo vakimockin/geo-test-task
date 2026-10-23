@@ -61,6 +61,8 @@ def test_streamed_oversized_body_is_413(client: TestClient) -> None:
     assert response.status_code == 413
 
 
-def test_openapi_lists_the_api(client: TestClient) -> None:
+def test_demo_page_and_openapi(client: TestClient) -> None:
+    page = client.get("/")
+    assert page.status_code == 200 and "Geotrack" in page.text
     paths = client.get("/openapi.json").json()["paths"]
     assert {"/api/v1/geozones", "/api/v1/positions", "/health/ready"} <= set(paths)

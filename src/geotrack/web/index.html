@@ -1,0 +1,279 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Geotrack live map</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha384-sHL9NAb7lN7rfvG5lfHpm643Xkcjzp4jFvuavGOndn6pjVqS6ny56CAt3nsEVT4H"
+      crossorigin="anonymous">
+<style>
+  :root { --bar: #1f2937; --ink: #111827; --muted: #6b7280; --line: #e5e7eb;
+          --accent: #2563eb; --alert: #dc2626; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; font: 13px/1.4 ui-sans-serif, system-ui, sans-serif;
+               color: var(--ink); }
+  body { display: grid; grid-template-rows: auto 1fr; }
+  header { display: flex; gap: 12px; align-items: center; padding: 8px 12px;
+           background: var(--bar); color: #f9fafb; }
+  header strong { font-size: 15px; margin-right: auto; }
+  header input { width: 140px; padding: 4px 6px; border-radius: 4px; border: 0; }
+  #state { min-width: 92px; text-align: right; color: #9ca3af; }
+  #state.on { color: #34d399; }
+  main { display: grid; grid-template-columns: 1fr 300px; min-height: 0; }
+  #map { min-height: 0; }
+  aside { border-left: 1px solid var(--line); overflow-y: auto; padding: 10px 12px; }
+  h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .05em;
+       color: var(--muted); margin: 14px 0 6px; }
+  label { display: block; margin: 4px 0; }
+  label input { width: 100%; padding: 4px 6px; border: 1px solid var(--line); border-radius: 4px; }
+  button { padding: 4px 10px; border: 1px solid var(--line); border-radius: 4px;
+           background: #fff; cursor: pointer; }
+  button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .hint { color: var(--muted); }
+  .zone { border: 1px solid var(--line); border-radius: 6px; padding: 6px; margin-bottom: 6px; }
+  .zone.flash { border-color: var(--alert); background: #fef2f2; }
+  .zone .row { display: flex; gap: 6px; align-items: center; margin-top: 4px; }
+  .zone .row input { width: 90px; padding: 2px 4px; }
+  #feed div { padding: 3px 0; border-bottom: 1px dashed var(--line); font-size: 12px; }
+  #counts { color: var(--muted); }
+  @media (max-width: 720px) { main { grid-template-columns: 1fr; grid-template-rows: 60vh auto; } }
+</style>
+</head>
+<body>
+<header>
+  <strong>Geotrack</strong>
+  <span>user</span><input id="user" value="alice" autocomplete="off">
+  <button id="go" class="primary">Connect</button>
+  <span id="state">offline</span>
+</header>
+<main>
+  <div id="map"></div>
+  <aside>
+    <h2>New geozone</h2>
+    <div class="hint" id="pick">Click the map to choose the center.</div>
+    <label>Name <input id="zone-name" maxlength="100" placeholder="optional"></label>
+    <label>Radius, m <input id="zone-radius" type="number" min="1" max="100000" value="750"></label>
+    <button id="zone-add" class="primary">Create</button>
+    <h2>My geozones</h2>
+    <div id="zones" class="hint">Connect to load zones.</div>
+    <h2>Alerts</h2>
+    <div id="counts">0 devices on map</div>
+    <div id="feed"></div>
+  </aside>
+</main>
+<script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha384-cxOPjt7s7Iz04uaHJceBmS+qpjv2JkIHNVcuOrM+YHwZOmJGBXI00mdUXEq65HTH"
+        crossorigin="anonymous"></script>
+<script>
+"use strict";
+const el = (id) => document.getElementById(id);
+const FEED_LIMIT = 150;
+
+const map = L.map("map", { preferCanvas: true }).setView([50.4501, 30.5234], 12);
+L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+  maxZoom: 19, attribution: "&copy; OpenStreetMap contributors",
+}).addTo(map);
+const dots = L.layerGroup().addTo(map);
+const rings = L.layerGroup().addTo(map);
+
+const session = { user: null, socket: null, retryIn: 1000, timer: null, center: null, pin: null };
+const markers = new Map();   // device_id -> circleMarker
+const zones = new Map();     // geozone id -> { circle, card }
+
+async function api(path, options = {}) {
+  const response = await fetch(`/api/v1${path}`, {
+    ...options,
+    headers: { "Content-Type": "application/json", "X-User-ID": session.user },
+  });
+  if (!response.ok) {
+    const problem = await response.json().catch(() => ({}));
+    throw new Error(problem.detail || `HTTP ${response.status}`);
+  }
+  return response.status === 204 ? null : response.json();
+}
+
+function viewport() {
+  const b = map.getBounds();
+  const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+  return [clamp(b.getWest(), -180, 180), clamp(b.getSouth(), -90, 90),
+          clamp(b.getEast(), -180, 180), clamp(b.getNorth(), -90, 90)];
+}
+
+let viewportTimer = null;
+function sendViewport() {
+  clearTimeout(viewportTimer);
+  viewportTimer = setTimeout(() => {
+    if (session.socket?.readyState === WebSocket.OPEN) {
+      session.socket.send(JSON.stringify({ viewport: viewport() }));
+    }
+  }, 200);
+}
+
+function placeDevices(items) {
+  for (const p of items) {
+    const marker = markers.get(p.device_id);
+    if (marker) { marker.setLatLng([p.latitude, p.longitude]); continue; }
+    markers.set(p.device_id, L.circleMarker([p.latitude, p.longitude], {
+      radius: 3, weight: 1, color: "#1d4ed8", fillOpacity: 0.8,
+    }).bindTooltip(p.device_id).addTo(dots));
+  }
+  const bounds = map.getBounds().pad(0.05);
+  for (const [id, marker] of markers) {
+    if (!bounds.contains(marker.getLatLng())) { dots.removeLayer(marker); markers.delete(id); }
+  }
+  el("counts").textContent = `${markers.size} devices on map`;
+}
+
+function dropDevices(ids) {
+  for (const id of ids) {
+    const marker = markers.get(id);
+    if (marker) { dots.removeLayer(marker); markers.delete(id); }
+  }
+  el("counts").textContent = `${markers.size} devices on map`;
+}
+
+function showAlert(items) {
+  const feed = el("feed");
+  for (const hit of items.slice(-20)) {
+    const line = document.createElement("div");
+    const zone = zones.get(hit.geozone_id);
+    const label = zone?.name || hit.geozone_id.slice(0, 8);
+    line.textContent = `${new Date(hit.reported_at).toLocaleTimeString()} ` +
+      `${hit.device_id} in ${label}`;
+    feed.prepend(line);
+  }
+  while (feed.childElementCount > FEED_LIMIT) feed.lastElementChild.remove();
+  for (const id of new Set(items.map((hit) => hit.geozone_id))) flash(id);
+}
+
+function flash(id) {
+  const zone = zones.get(id);
+  if (!zone) return;
+  zone.circle.setStyle({ color: "#dc2626" });
+  zone.card.classList.add("flash");
+  clearTimeout(zone.timer);
+  zone.timer = setTimeout(() => {
+    zone.circle.setStyle({ color: "#2563eb" });
+    zone.card.classList.remove("flash");
+  }, 1500);
+}
+
+function zoneCard(z) {
+  const card = document.createElement("div");
+  card.className = "zone";
+  const title = document.createElement("div");
+  title.textContent = `${z.name || "(unnamed)"} · ${Math.round(z.radius_m)} m`;
+  const row = document.createElement("div");
+  row.className = "row";
+  const radius = document.createElement("input");
+  radius.type = "number"; radius.min = "1"; radius.max = "100000"; radius.value = z.radius_m;
+  const save = document.createElement("button");
+  save.textContent = "Resize";
+  save.onclick = () => api(`/geozones/${z.id}`, {
+    method: "PATCH", body: JSON.stringify({ radius_m: Number(radius.value) }),
+  }).catch((e) => alert(e.message));
+  const remove = document.createElement("button");
+  remove.textContent = "Delete";
+  remove.onclick = () => api(`/geozones/${z.id}`, { method: "DELETE" })
+    .catch((e) => alert(e.message));
+  row.append(radius, save, remove);
+  card.append(title, row);
+  return card;
+}
+
+async function loadZones() {
+  const list = await api("/geozones?limit=500");
+  rings.clearLayers();
+  zones.clear();
+  const box = el("zones");
+  box.replaceChildren();
+  box.classList.toggle("hint", list.length === 0);
+  if (list.length === 0) box.textContent = "No zones yet.";
+  for (const z of list) {
+    const circle = L.circle([z.latitude, z.longitude], {
+      radius: z.radius_m, color: "#2563eb", weight: 2, fillOpacity: 0.1,
+    }).addTo(rings);
+    const card = zoneCard(z);
+    box.append(card);
+    zones.set(z.id, { circle, card, name: z.name, timer: null });
+  }
+}
+
+function onFrame(event) {
+  const frame = JSON.parse(event.data);
+  switch (frame.kind) {
+    case "hello": sendViewport(); break;
+    case "positions": placeDevices(frame.items); break;
+    case "alert": showAlert(frame.items); break;
+    case "gone": dropDevices(frame.device_ids); break;
+    case "geozones_changed": loadZones().catch(console.error); break;
+    case "error": console.warn("server:", frame.detail); break;
+  }
+}
+
+function connect() {
+  clearTimeout(session.timer);
+  const scheme = location.protocol === "https:" ? "wss" : "ws";
+  const socket = new WebSocket(
+    `${scheme}://${location.host}/ws/live?user=${encodeURIComponent(session.user)}`);
+  session.socket = socket;
+  socket.onmessage = onFrame;
+  socket.onopen = () => {
+    session.retryIn = 1000;
+    el("state").textContent = "live";
+    el("state").classList.add("on");
+  };
+  socket.onclose = () => {
+    if (session.socket !== socket) return;
+    el("state").textContent = "reconnecting";
+    el("state").classList.remove("on");
+    session.timer = setTimeout(connect, session.retryIn);
+    session.retryIn = Math.min(session.retryIn * 2, 15000);
+  };
+}
+
+el("go").onclick = () => {
+  const user = el("user").value.trim();
+  if (!user) return;
+  session.user = user;
+  if (session.socket) { const old = session.socket; session.socket = null; old.close(); }
+  dots.clearLayers();
+  markers.clear();
+  el("feed").replaceChildren();
+  connect();
+  loadZones().catch((e) => { el("zones").textContent = e.message; });
+};
+
+map.on("click", (event) => {
+  session.center = event.latlng;
+  if (session.pin) map.removeLayer(session.pin);
+  session.pin = L.marker(event.latlng).addTo(map);
+  el("pick").textContent =
+    `Center ${event.latlng.lat.toFixed(5)}, ${event.latlng.lng.toFixed(5)}`;
+});
+
+el("zone-add").onclick = async () => {
+  if (!session.user || !session.center) return;
+  try {
+    await api("/geozones", {
+      method: "POST",
+      body: JSON.stringify({
+        name: el("zone-name").value.trim(),
+        latitude: session.center.lat,
+        longitude: session.center.lng,
+        radius_m: Number(el("zone-radius").value),
+      }),
+    });
+  } catch (e) { alert(e.message); return; }
+  if (session.pin) map.removeLayer(session.pin);
+  session.pin = null;
+  session.center = null;
+  el("zone-name").value = "";
+  el("pick").textContent = "Click the map to choose the center.";
+};
+
+map.on("moveend", sendViewport);
+</script>
+</body>
+</html>
