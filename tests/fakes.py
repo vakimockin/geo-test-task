@@ -1,3 +1,4 @@
+import asyncio
 from collections.abc import Mapping, Sequence
 from contextlib import AsyncExitStack
 from dataclasses import dataclass, field
@@ -64,6 +65,24 @@ class RecordingBus:
         if self.broken:
             raise ConnectionError("bus is down")
         self.frames.extend(items)
+
+
+class FakeSocket:
+    """Records frames; optionally blocks every send until released."""
+
+    def __init__(self, *, gated: bool = False) -> None:
+        self.sent: list[str] = []
+        self.closed: tuple[int, str | None] | None = None
+        self.gate = asyncio.Event()
+        if not gated:
+            self.gate.set()
+
+    async def send_text(self, data: str) -> None:
+        await self.gate.wait()
+        self.sent.append(data)
+
+    async def close(self, code: int = 1000, reason: str | None = None) -> None:
+        self.closed = (code, reason)
 
 
 @dataclass
