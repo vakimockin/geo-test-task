@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+
+# Tooling caches
+.mypy_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Local configuration and editors
+.env
+.idea/
+.vscode/
+.DS_Store
+
+# Private working notes (task statement, plans)
+task/
