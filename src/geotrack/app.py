@@ -3,7 +3,7 @@ from contextlib import AsyncExitStack, asynccontextmanager
 
 from fastapi import APIRouter, FastAPI
 
-from geotrack import __version__
+from geotrack import __version__, health
 from geotrack.body_limit import BodyLimitMiddleware
 from geotrack.config import Settings
 from geotrack.live import routes as live_routes
@@ -41,4 +41,5 @@ def create_app(
     api.include_router(telemetry_routes.router)
     app.include_router(api)
     app.include_router(live_routes.router)
+    app.include_router(health.router)
     return app

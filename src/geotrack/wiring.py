@@ -10,6 +10,8 @@ from redis.asyncio.retry import Retry
 from redis.backoff import ExponentialBackoff
 from redis.exceptions import ConnectionError as RedisConnectionError
 from redis.exceptions import TimeoutError as RedisTimeoutError
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncEngine
 
 from geotrack.config import Settings
 from geotrack.db.engine import make_engine, make_sessions
@@ -17,7 +19,7 @@ from geotrack.live import frames
 from geotrack.live.bus import RedisBus
 from geotrack.live.cache import PositionCache
 from geotrack.live.hub import Hub
-from geotrack.runtime import Runtime
+from geotrack.runtime import Probe, Runtime
 from geotrack.telemetry.intake import Intake, TimeWindow
 from geotrack.telemetry.pipeline import PositionPipeline
 from geotrack.telemetry.processor import TelemetryProcessor
@@ -81,12 +83,19 @@ async def build_runtime(settings: Settings, stack: AsyncExitStack) -> Runtime:
         bus,
         per_user_limit=settings.max_geozones_per_user,
     )
+    probes: list[tuple[str, Probe]] = [
+        ("database", lambda: _select_one(engine)),
+        ("redis", lambda: _ping(redis)),
+        ("bus", lambda: _flag(bus.connected, "not subscribed")),
+        ("pipeline", lambda: _flag(pipeline.running, "flusher stopped")),
+    ]
     return Runtime(
         settings=settings,
         zones=zones,
         intake=Intake(pipeline, window),
         pipeline=pipeline,
         hub=hub,
+        probes=probes,
     )
 
 
@@ -113,3 +122,17 @@ async def _warm_cache(cache: PositionCache, store: PositionStore, ttl: float) ->
         (p.device_id, p.lat, p.lon, frames.epoch_ms(p.reported_at)) for p in recent
     )
     log.info("live cache warmed with %d devices", len(recent))
+
+
+async def _select_one(engine: AsyncEngine) -> None:
+    async with engine.connect() as conn:
+        await conn.execute(text("SELECT 1"))
+
+
+async def _ping(redis: Redis) -> None:
+    await redis.ping()
+
+
+async def _flag(ok: bool, problem: str) -> None:
+    if not ok:
+        raise RuntimeError(problem)

@@ -63,4 +63,4 @@ def test_streamed_oversized_body_is_413(client: TestClient) -> None:
 
 def test_openapi_lists_the_api(client: TestClient) -> None:
     paths = client.get("/openapi.json").json()["paths"]
-    assert {"/api/v1/geozones", "/api/v1/positions"} <= set(paths)
+    assert {"/api/v1/geozones", "/api/v1/positions", "/health/ready"} <= set(paths)

@@ -10,7 +10,7 @@ from geotrack.config import Settings
 from geotrack.db.tables import Geozone
 from geotrack.live.cache import PositionCache
 from geotrack.live.hub import Hub
-from geotrack.runtime import Runtime
+from geotrack.runtime import Probe, Runtime
 from geotrack.telemetry.intake import Intake, TimeWindow
 from geotrack.telemetry.model import AppliedPosition, PositionReport
 from geotrack.telemetry.pipeline import PositionPipeline
@@ -115,7 +115,9 @@ class StubRuntimeParts:
     runtime: Runtime
 
 
-def stub_runtime(settings: Settings) -> StubRuntimeParts:
+def stub_runtime(
+    settings: Settings, probes: Sequence[tuple[str, Probe]] = ()
+) -> StubRuntimeParts:
     zones = MemoryZones()
     bus = RecordingBus()
     flushed: list[list[PositionReport]] = []
@@ -146,6 +148,7 @@ def stub_runtime(settings: Settings) -> StubRuntimeParts:
         intake=Intake(pipeline, window),
         pipeline=pipeline,
         hub=hub,
+        probes=list(probes),
     )
     return StubRuntimeParts(zones, bus, flushed, runtime)
 
